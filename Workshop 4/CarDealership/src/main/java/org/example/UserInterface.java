@@ -12,6 +12,7 @@ public class UserInterface {
 
     private Dealership dealership;
     private DealershipFileManager fileManager;
+    private final ContractFileManager contractFileManager = new ContractFileManager();
     private final Scanner scanner = new Scanner(System.in);
 
     public UserInterface() {
@@ -40,6 +41,8 @@ public class UserInterface {
                 case 7 -> processGetAllVehiclesRequest();
                 case 8 -> processAddVehicleRequest();
                 case 9 -> processRemoveVehicleRequest();
+                case 10 -> processBuyRequest();
+                case 11 -> processLeaseRequest();
                 case 99 -> {
                     System.out.println("Goodbye!");
                     running = false;
@@ -68,6 +71,8 @@ public class UserInterface {
         System.out.println(" 7 - List ALL vehicles");
         System.out.println(" 8 - Add a vehicle");
         System.out.println(" 9 - Remove a vehicle");
+        System.out.println("10 - Buy a vehicle");
+        System.out.println("11 - Lease a vehicle");
         System.out.println("99 - Quit");
         System.out.print("Enter your choice: ");
     }
@@ -203,6 +208,126 @@ public class UserInterface {
         }
     }
 
+    // Buying a vehicle: collect the customer's info, show the contract, then finish the sale
+    public void processBuyRequest() {
+        Vehicle vehicle = promptForVehicleForContract("buy");
+
+        if (vehicle == null) {
+            return;
+        }
+
+        String customerName = promptForText("Customer name: ");
+        String customerEmail = promptForEmail();
+        boolean financed = promptForYesNo("Finance this purchase? (y/n): ");
+
+        SalesContract contract = new SalesContract(LocalDate.now(), customerName, customerEmail, vehicle, financed);
+        displaySalesContract(contract);
+
+        completeContract(contract, "Complete this sale? (y/n): ", "Sale complete! The vehicle was removed from inventory.");
+    }
+
+    // Leasing a vehicle: same steps as buying, but only newer vehicles can be leased
+    public void processLeaseRequest() {
+        Vehicle vehicle = promptForVehicleForContract("lease");
+
+        if (vehicle == null) {
+            return;
+        }
+
+        if (!LeaseContract.canLease(vehicle)) {
+            System.out.println("Only vehicles that are 3 years old or newer can be leased.");
+            return;
+        }
+
+        String customerName = promptForText("Customer name: ");
+        String customerEmail = promptForEmail();
+
+        LeaseContract contract = new LeaseContract(LocalDate.now(), customerName, customerEmail, vehicle);
+        displayLeaseContract(contract);
+
+        completeContract(contract, "Complete this lease? (y/n): ", "Lease complete! The vehicle was removed from inventory.");
+    }
+
+    // Asks for a VIN and shows the vehicle. Returns null if it cannot be found.
+    private Vehicle promptForVehicleForContract(String action) {
+        int vin = promptForWholeNumber("VIN of the vehicle to " + action + ": ");
+        Vehicle vehicle = findVehicleByVin(vin);
+
+        if (vehicle == null) {
+            System.out.println("No vehicle with that VIN was found.");
+            return null;
+        }
+
+        displayVehicles(List.of(vehicle));
+        return vehicle;
+    }
+
+    // Asks for a final yes. If yes: saves the contract, then removes the vehicle from inventory.
+    private void completeContract(Contract contract, String confirmPrompt, String successMessage) {
+        if (!promptForYesNo(confirmPrompt)) {
+            System.out.println("Cancelled. Nothing was changed.");
+            return;
+        }
+
+        // Save the contract first, so a vehicle is never removed without a record of the deal
+        if (!contractFileManager.saveContract(contract)) {
+            System.out.println("The contract could not be saved, so the vehicle was not removed.");
+            return;
+        }
+
+        dealership.removeVehicle(contract.getVehicleSold());
+        fileManager.saveDealership(dealership);
+
+        System.out.println(successMessage);
+    }
+
+    private void displaySalesContract(SalesContract contract) {
+        System.out.println("\n========== SALES CONTRACT ==========");
+        printContractHeader(contract);
+        System.out.printf("Vehicle Price:   %12s%n", formatMoney(contract.getVehicleSold().getPrice()));
+        System.out.printf("Sales Tax (5%%):  %12s%n", formatMoney(contract.getSalesTax()));
+        System.out.printf("Recording Fee:   %12s%n", formatMoney(contract.getRecordingFee()));
+        System.out.printf("Processing Fee:  %12s%n", formatMoney(contract.getProcessingFee()));
+        System.out.println("------------------------------------");
+        System.out.printf("Total Price:     %12s%n", formatMoney(contract.getTotalPrice()));
+        System.out.println("Financed:        " + (contract.isFinanced() ? "Yes" : "No"));
+
+        if (contract.isFinanced()) {
+            System.out.printf("Monthly Payment: %12s%n", formatMoney(contract.getMonthlyPayment()));
+        }
+
+        System.out.println("====================================");
+    }
+
+    private void displayLeaseContract(LeaseContract contract) {
+        System.out.println("\n========== LEASE CONTRACT ==========");
+        printContractHeader(contract);
+        System.out.printf("Vehicle Price:        %12s%n", formatMoney(contract.getVehicleSold().getPrice()));
+        System.out.printf("Expected End Value:   %12s%n", formatMoney(contract.getExpectedEndingValue()));
+        System.out.printf("Lease Fee (7%%):       %12s%n", formatMoney(contract.getLeaseFee()));
+        System.out.println("Lease Length:         " + LeaseContract.getLeaseMonths() + " months");
+        System.out.println("------------------------------------");
+        System.out.printf("Monthly Payment:      %12s%n", formatMoney(contract.getMonthlyPayment()));
+        System.out.printf("Total Over Lease:     %12s%n", formatMoney(contract.getTotalPrice()));
+        System.out.println("====================================");
+    }
+
+    // The lines that look the same on every contract
+    private void printContractHeader(Contract contract) {
+        Vehicle vehicle = contract.getVehicleSold();
+
+        System.out.println("Date:     " + contract.getDate());
+        System.out.println("Customer: " + contract.getCustomerName());
+        System.out.println("Email:    " + contract.getCustomerEmail());
+        System.out.println("Vehicle:  " + vehicle.getYear() + " " + vehicle.getMake() + " " + vehicle.getModel()
+                + " (VIN " + vehicle.getVin() + ")");
+        System.out.println("------------------------------------");
+    }
+
+    private String formatMoney(BigDecimal amount) {
+        return String.format("$%,.2f", amount);
+    }
+
     // Returns the vehicle with this VIN, or null if there is none
     private Vehicle findVehicleByVin(int vin) {
         for (Vehicle vehicle : dealership.getAllVehicles()) {
@@ -265,6 +390,35 @@ public class UserInterface {
             }
 
             System.out.println("Please enter a price like 12995.50.");
+        }
+    }
+
+    private boolean promptForYesNo(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String answer = scanner.nextLine().trim();
+
+            if (answer.equalsIgnoreCase("y")) {
+                return true;
+            }
+
+            if (answer.equalsIgnoreCase("n")) {
+                return false;
+            }
+
+            System.out.println("Please enter y or n.");
+        }
+    }
+
+    private String promptForEmail() {
+        while (true) {
+            String email = promptForText("Customer email: ");
+
+            if (email.contains("@") && email.contains(".")) {
+                return email;
+            }
+
+            System.out.println("Please enter a valid email, like name@example.com.");
         }
     }
 
